@@ -23,7 +23,7 @@ except ImportError:
     mt5 = None
 
 # ==============================================================================
-#  Load Configuration from .env file
+#  Load Configuration
 # ==============================================================================
 load_dotenv()
 
@@ -31,12 +31,19 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TARGET_WINDOW_TITLE = os.getenv("TARGET_WINDOW_TITLE")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PROMPT_TEMPLATE = os.getenv("PROMPT_TEMPLATE")
+
+# Load the prompt from a separate file to avoid parsing errors in .env
+try:
+    with open("prompt.txt", "r", encoding="utf-8") as f:
+        PROMPT_TEMPLATE = f.read()
+except FileNotFoundError:
+    print("FATAL ERROR: prompt.txt not found. Please create it in the same directory.", file=sys.stderr)
+    sys.exit(1) # Exit the script if prompt is missing
 # ==============================================================================
 
-def get_price_from_mt5() -> float | None:
+def get_price_from_mt5(symbol: str) -> float | None:
     """
-    Fetches the latest price for XAUUSD directly from the MetaTrader 5 terminal.
+    Fetches the latest price for a given symbol directly from the MetaTrader 5 terminal.
     """
     if not mt5:
         print(f"[{datetime.now()}] ❌ ERROR: MetaTrader5 library is not available.", file=sys.stderr)
@@ -50,7 +57,6 @@ def get_price_from_mt5() -> float | None:
         return None
 
     try:
-        symbol = "XAUUSD"
         tick = mt5.symbol_info_tick(symbol)
         mt5.shutdown() 
 
@@ -60,7 +66,7 @@ def get_price_from_mt5() -> float | None:
             return None
         
         price = tick.ask
-        print(f"[{datetime.now()}] ✅ Price from MT5 for {symbol}: ${price:.3f}")
+        print(f"[{datetime.now()}] ✅ Price from MT5 for {symbol}: ${price:.5f}")
         return price
 
     except Exception as e:
@@ -96,15 +102,44 @@ def analyze_image_with_gemini(api_key: str, image_object: Image.Image, text_prom
     print(f"[{datetime.now()}] Sending image to Gemini API for analysis...")
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+        
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "action": {"type": "string"},
+                "order_type": {"type": "string"},
+                "volume": {"type": "number"},
+                "stop_loss": {"type": "number"},
+                "take_profit": {"type": "number"},
+                "entry_price": {"type": "number"},
+                "confidence": {"type": "number"},
+                "reasoning": {"type": "string"}
+            },
+            "required": ["symbol", "action", "volume", "stop_loss", "take_profit"]
+        }
+        
+        model = genai.GenerativeModel(
+            'gemini-1.5-flash', 
+            generation_config={
+                "response_mime_type": "application/json",
+                "response_schema": json_schema
+            }
+        )
         
         img_byte_arr = io.BytesIO()
         image_object.save(img_byte_arr, format='PNG')
-        image_part = {"mime_type": "image/png", "data": img_byte_arr.getvalue()}
+        img_byte_arr.seek(0)
+        
+        image_part = genai.types.BlobDict(
+            mime_type="image/png",
+            data=img_byte_arr.getvalue()
+        )
         
         response = model.generate_content([text_prompt, image_part])
         print(f"[{datetime.now()}] ✅ Analysis successful!")
         return response.text
+        
     except Exception as e:
         print(f"[{datetime.now()}] ❌ ERROR with Gemini API: {e}", file=sys.stderr)
         return None
@@ -125,7 +160,11 @@ def main():
     print(f"[{datetime.now()}] 🚀 Starting Visual Automation Trading Task (MT5 API Mode)")
     print("=" * 50)
 
-    live_price = get_price_from_mt5()
+    # Load custom symbol and volume from .env file, with defaults if they don't exist.
+    trade_symbol = os.getenv("TRADE_SYMBOL", "XAUUSD")
+    trade_volume = float(os.getenv("TRADE_VOLUME", 1.0))
+
+    live_price = get_price_from_mt5(trade_symbol)
     if not live_price:
         print(f"[{datetime.now()}] ❌ ABORTING TASK: Could not get live price from MT5.", file=sys.stderr)
         return
@@ -134,55 +173,45 @@ def main():
     if not captured_image:
         print(f"[{datetime.now()}] ❌ ABORTING TASK: Screen capture failed.", file=sys.stderr)
         return
+        
+    prompt_with_price = PROMPT_TEMPLATE.replace("{{live_price}}", str(live_price))
 
-    initial_analysis = analyze_image_with_gemini(GEMINI_API_KEY, captured_image, PROMPT_TEMPLATE)
+    initial_analysis = analyze_image_with_gemini(GEMINI_API_KEY, captured_image, prompt_with_price)
     if not initial_analysis:
         print(f"[{datetime.now()}] ❌ ABORTING TASK: Gemini analysis failed.", file=sys.stderr)
         return
 
+    final_result = {}
     try:
         clean_json = initial_analysis.strip().replace("```json", "").replace("```", "")
         trade_decision = json.loads(clean_json)
         
-        # Print what Gemini returned for debugging
         print(f"[{datetime.now()}] 🔍 Full response: {clean_json}")
         
-        # Use Gemini's response directly but standardize the format
-        action = trade_decision.get("action") or trade_decision.get("direction") or trade_decision.get("order_type", "")
-        action = action.upper().strip() if action else ""
+        action = trade_decision.get("action") or trade_decision.get("order_type") or trade_decision.get("direction")
+
+        # Build the dictionary using the custom symbol and volume from .env
+        final_result = {
+            "symbol": trade_symbol, # This now ALWAYS uses the value from your .env file
+            "action": action,
+            "take_profit": trade_decision.get("take_profit") or trade_decision.get("tp"),
+            "stop_loss": trade_decision.get("stop_loss") or trade_decision.get("sl"),
+            "volume": trade_volume # This also ALWAYS uses the value from your .env file
+        }
+
+        # Conditionally add the "price" key ONLY for pending orders.
+        entry_price = trade_decision.get("entry_price") or trade_decision.get("price")
+        if entry_price:
+            final_result["price"] = entry_price
         
-        # Different JSON format for market orders (BUY/SELL) vs pending orders
-        if action in ["BUY", "SELL"]:
-            # Market orders - include sl/tp but no price
-            final_result = {
-                "symbol": trade_decision.get("symbol", "XAUUSD"),
-                "action": action.lower(),  # lowercase for market orders
-                "volume": str(trade_decision.get("volume") or trade_decision.get("vol", "0.01")),
-                "sl": trade_decision.get("sl") or trade_decision.get("stop_loss"),
-                "tp": trade_decision.get("tp") or trade_decision.get("take_profit")
-            }
-        else:
-            # Full format for pending orders (LIMIT/STOP) - include price, sl, tp
-            final_result = {
-                "symbol": trade_decision.get("symbol", "XAUUSD"),
-                "action": action,
-                "volume": str(trade_decision.get("volume") or trade_decision.get("vol", "0.01")),
-                "price": trade_decision.get("price") or trade_decision.get("entry_price"),
-                "sl": trade_decision.get("sl") or trade_decision.get("stop_loss"),
-                "tp": trade_decision.get("tp") or trade_decision.get("take_profit")
-            }
-            
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[{datetime.now()}] ❌ ERROR processing Gemini's response: {e}", file=sys.stderr)
         print(f"[{datetime.now()}] 🔍 Raw response: {initial_analysis}", file=sys.stderr)
-        # Return raw response if JSON parsing fails
         final_result = {
             "error": "Failed to parse Gemini response",
-            "raw_response": initial_analysis,
-            "current_price": live_price
+            "raw_response": initial_analysis
         }
 
-    # Always output the full result from Gemini
     final_result_json = json.dumps(final_result, indent=4)
     print(f"\n[{datetime.now()}] --- 📊 FULL GEMINI RESPONSE ---")
     print(final_result_json)
