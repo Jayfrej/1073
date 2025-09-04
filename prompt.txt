@@ -20,17 +20,6 @@ If no valid pending order is found, respond with a market order (action: "BUY" o
 Final Output Format:
 Your response must be a complete and valid JSON object following this structure:
 
-json
-
-{
-  "symbol": "XAUUSD",
-  "action": "BUY|SELL|BUY_LIMIT|SELL_LIMIT|BUY_STOP|SELL_STOP",
-  "entry_price": [MANDATORY NUMBER - ALWAYS REQUIRED],
-  "stop_loss": [number],
-  "take_profit": [number],
-  "confidence": [0-100],
-  "reasoning": "Your analysis explanation"
-}
 Examples:
 
 Market Order:
