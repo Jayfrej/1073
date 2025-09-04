@@ -194,7 +194,7 @@ def analyze_image_with_gemini(api_key: str, image_object: Image.Image, text_prom
     try:
         genai.configure(api_key=api_key)
         
-        # UPDATED JSON SCHEMA - เพิ่ม entry_price เป็น required field
+        # FIXED JSON SCHEMA - Removed unsupported 'minimum' and 'maximum' properties
         json_schema = {
             "type": "object",
             "properties": {
@@ -208,7 +208,10 @@ def analyze_image_with_gemini(api_key: str, image_object: Image.Image, text_prom
                     "type": "number",
                     "description": "MANDATORY: Entry price is REQUIRED for ALL orders. For market orders, use current market price. For pending orders (LIMIT/STOP), use the specific entry level."
                 },
-                "confidence": {"type": "number", "minimum": 0, "maximum": 100},
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence level between 0 and 100"
+                },
                 "reasoning": {"type": "string"}
             },
             "required": ["symbol", "action", "entry_price", "stop_loss", "take_profit"],
@@ -317,6 +320,7 @@ CRITICAL REQUIREMENTS:
 - For PENDING orders (BUY_LIMIT/SELL_LIMIT/BUY_STOP/SELL_STOP): entry_price = your specified entry level
 - The "entry_price" field is mandatory and must be a numeric value
 - Current market price is: {live_price}
+- Confidence should be between 0 and 100
 
 Remember: entry_price is REQUIRED for risk management and lot size calculation!
 """
