@@ -194,20 +194,25 @@ def analyze_image_with_gemini(api_key: str, image_object: Image.Image, text_prom
     try:
         genai.configure(api_key=api_key)
         
+        # UPDATED JSON SCHEMA - เพิ่ม entry_price เป็น required field
         json_schema = {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string"},
-                "action": {"type": "string"},
-                "order_type": {"type": "string"},
+                "action": {"type": "string", "enum": ["BUY", "SELL", "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"]},
+                "order_type": {"type": "string", "enum": ["MARKET", "LIMIT", "STOP"]},
                 "volume": {"type": "number"},
                 "stop_loss": {"type": "number"},
                 "take_profit": {"type": "number"},
-                "entry_price": {"type": "number"},
-                "confidence": {"type": "number"},
+                "entry_price": {
+                    "type": "number",
+                    "description": "MANDATORY: Entry price is REQUIRED for ALL orders. For market orders, use current market price. For pending orders (LIMIT/STOP), use the specific entry level."
+                },
+                "confidence": {"type": "number", "minimum": 0, "maximum": 100},
                 "reasoning": {"type": "string"}
             },
-            "required": ["symbol", "action", "stop_loss", "take_profit"]
+            "required": ["symbol", "action", "entry_price", "stop_loss", "take_profit"],
+            "description": "CRITICAL: entry_price field is MANDATORY and must ALWAYS be provided for every trade signal, regardless of order type."
         }
         
         model = genai.GenerativeModel(
@@ -234,6 +239,40 @@ def analyze_image_with_gemini(api_key: str, image_object: Image.Image, text_prom
     except Exception as e:
         print(f"[{datetime.now()}] ❌ ERROR with Gemini API: {e}", file=sys.stderr)
         return None
+
+def validate_and_fix_trade_data(trade_decision: dict, live_price: float) -> dict:
+    """
+    Validates trade data and ensures entry_price is always present.
+    If entry_price is missing, it will be set based on order type.
+    """
+    print(f"[{datetime.now()}] 🔍 Validating trade data...")
+    
+    # Get action/order type
+    action = trade_decision.get("action") or trade_decision.get("order_type") or trade_decision.get("direction")
+    entry_price = trade_decision.get("entry_price") or trade_decision.get("price")
+    
+    # If entry_price is missing, calculate it based on action
+    if not entry_price:
+        print(f"[{datetime.now()}] ⚠️ WARNING: entry_price is missing! Attempting to fix...")
+        
+        if action in ["BUY", "SELL"]:
+            # Market orders use current price
+            entry_price = live_price
+            print(f"[{datetime.now()}] 🔧 FIX: Set entry_price to current market price: {entry_price}")
+        elif action in ["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"]:
+            # For pending orders, we can't guess the entry price - this is an error
+            print(f"[{datetime.now()}] ❌ CRITICAL ERROR: Pending order {action} requires explicit entry_price!")
+            print(f"[{datetime.now()}] 🔧 FALLBACK: Using current market price, but this may not be correct!")
+            entry_price = live_price
+        else:
+            entry_price = live_price
+            print(f"[{datetime.now()}] 🔧 FIX: Unknown action '{action}', using market price: {entry_price}")
+        
+        # Update the trade decision
+        trade_decision["entry_price"] = entry_price
+    
+    print(f"[{datetime.now()}] ✅ Trade data validation complete!")
+    return trade_decision
         
 def send_webhook(webhook_url: str, data: str):
     if not webhook_url: return
@@ -268,9 +307,21 @@ def main():
         print(f"[{datetime.now()}] ❌ ABORTING TASK: Screen capture failed.", file=sys.stderr)
         return
         
-    prompt_with_price = PROMPT_TEMPLATE.replace("{{live_price}}", str(live_price))
+    # ENHANCED PROMPT - เพิ่มความชัดเจนเรื่อง entry_price
+    enhanced_prompt = f"""
+{PROMPT_TEMPLATE}
 
-    initial_analysis = analyze_image_with_gemini(GEMINI_API_KEY, captured_image, prompt_with_price)
+CRITICAL REQUIREMENTS:
+- You MUST provide "entry_price" field in EVERY response, without exception
+- For MARKET orders (BUY/SELL): entry_price = current market price ({live_price})
+- For PENDING orders (BUY_LIMIT/SELL_LIMIT/BUY_STOP/SELL_STOP): entry_price = your specified entry level
+- The "entry_price" field is mandatory and must be a numeric value
+- Current market price is: {live_price}
+
+Remember: entry_price is REQUIRED for risk management and lot size calculation!
+"""
+    
+    initial_analysis = analyze_image_with_gemini(GEMINI_API_KEY, captured_image, enhanced_prompt)
     if not initial_analysis:
         print(f"[{datetime.now()}] ❌ ABORTING TASK: Gemini analysis failed.", file=sys.stderr)
         return
@@ -280,18 +331,25 @@ def main():
         clean_json = initial_analysis.strip().replace("```json", "").replace("```", "")
         trade_decision = json.loads(clean_json)
         
-        print(f"[{datetime.now()}] 🔍 Full response: {clean_json}")
+        print(f"[{datetime.now()}] 🔍 Raw Gemini response: {clean_json}")
+        
+        # VALIDATE AND FIX TRADE DATA
+        trade_decision = validate_and_fix_trade_data(trade_decision, live_price)
         
         action = trade_decision.get("action") or trade_decision.get("order_type") or trade_decision.get("direction")
         stop_loss = trade_decision.get("stop_loss") or trade_decision.get("sl")
         take_profit = trade_decision.get("take_profit") or trade_decision.get("tp")
         entry_price = trade_decision.get("entry_price") or trade_decision.get("price")
         
-        # Calculate lot size based on entry price and stop loss
+        # Validate that we have entry_price
+        if not entry_price:
+            print(f"[{datetime.now()}] ❌ CRITICAL ERROR: entry_price is still missing after validation!")
+            entry_price = live_price
+            print(f"[{datetime.now()}] 🔧 EMERGENCY FALLBACK: Using market price {entry_price}")
+        
+        # Calculate lot size using entry price
         if stop_loss:
-            # Use entry_price if available, otherwise use current market price
-            calc_entry_price = entry_price if entry_price else live_price
-            calculated_lot_size = calculate_lot_size(calc_entry_price, stop_loss, TRADE_SYMBOL)
+            calculated_lot_size = calculate_lot_size(entry_price, stop_loss, TRADE_SYMBOL)
         else:
             print(f"[{datetime.now()}] ⚠️ WARNING: No stop loss provided. Using default lot size 0.01")
             calculated_lot_size = 0.01
@@ -300,13 +358,14 @@ def main():
         final_result = {
             "symbol": TRADE_SYMBOL,
             "action": action,
-            "take_profit": take_profit,
+            "entry_price": entry_price,  # ALWAYS include entry_price
             "stop_loss": stop_loss,
+            "take_profit": take_profit,
             "volume": calculated_lot_size
         }
 
-        # Conditionally add the "price" key ONLY for pending orders
-        if entry_price:
+        # For backward compatibility, also add "price" field for pending orders
+        if action and action in ["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"]:
             final_result["price"] = entry_price
         
     except (json.JSONDecodeError, ValueError) as e:
