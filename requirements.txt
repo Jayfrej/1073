@@ -1,0 +1,11 @@
+# requirements.txt
+
+streamlit
+google-generativeai
+Pillow
+pyautogui
+pygetwindow
+requests
+mss
+python-dotenv
+MetaTrader5
