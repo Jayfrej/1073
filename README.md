@@ -124,58 +124,148 @@ Then edit the `.env` file with your settings:
 4.  Ensure the symbol specified in `TRADE_SYMBOL` is visible in your "Market Watch" panel.
 
 ## 🚀 How to Use
+### Method 1: Manual Execution
 
-### Manual Execution
-
-Run the script directly from your terminal for immediate analysis.
+Run the main automation script:
 
 ```bash
 cd C:\Users\User\Downloads\1073
 python capture_task.py
 ```
 
-### Scheduled Automation (Windows Task Scheduler)
-
-Automate the analysis to run on a schedule (e.g., every hour, or at market open).
-
-1.  **Open Task Scheduler**: Press `Win + R`, type `taskschd.msc`, and press Enter.
-2.  **Create Task**: In the "Actions" pane, click "Create Basic Task...".
-3.  **Name**: Give it a descriptive name like `MT5 AI Trading Analysis`.
-4.  **Trigger**: Choose your desired schedule (e.g., "Daily"). Set the start time and recurrence.
-5.  **Action**: Select "Start a program".
-      - **Program/script**: `C:\Users\User\Downloads\1073\run_agent.bat`
-      - **Start in (optional)**: `cd C:\Users\User\Downloads\1073`
-6.  **Finish**: Review and click "Finish".
-7.  **Advanced Settings**:
-      - Right-click the task and select "Properties".
-      - Under the "General" tab, select `Run whether user is logged on or not`.
-      - Under the "Conditions" tab, uncheck `Start the task only if the computer is on AC power` if you are using a laptop.
-
-## 🧮 Lot Size Calculation Explained
-
-The script's core risk management feature prevents catastrophic losses by calculating the appropriate trade volume. The detailed calculation is logged for full transparency.
-
-**Formula**:
-`Lot Size = (Account Balance * (Risk Percentage / 100)) / ((|Entry Price - Stop Loss|) * Contract Size)`
-
-**Example Log Output**:
-
+Or use the Windows batch file:
+```bash
+cd C:\Users\User\Downloads\1073
+run_agent.bat
 ```
-[2025-09-12 22:59:10] 📊 LOT SIZE CALCULATION:
-  Symbol: XAUUSD
-  Account Balance: $10,000.00
-  Risk Percentage: 1.5%
-  Max Risk Amount: $150.00
-  Entry Price: 2350.5
-  Stop Loss: 2345.0
-  Price Difference: 5.5
-  Contract Size: 100
-  Risk per Lot: $550.00
-  Raw Calculation: 0.2727
-  Final Lot Size: 0.27
-  Actual Risk: $148.50 (✅ SAFE)
-  Risk Safety Margin: $1.50
+
+### Method 2: Interactive Web Interface
+
+Launch the Streamlit interface:
+
+```bash
+cd C:\Users\User\Downloads\1073
+streamlit run app.py
 ```
+
+Then:
+1. Enter your Gemini API key in the sidebar
+2. Select the MetaTrader 5 window from the dropdown
+3. Type `/capture` in the chat to analyze the current chart
+
+### Method 3: Automated Scheduling
+
+Set up daily automated execution using Windows Task Scheduler.
+
+#### Windows Task Scheduler
+
+**Step 1: Open Task Scheduler**
+- Press `Windows + R`, type `taskschd.msc`, press Enter
+- Or search "Task Scheduler" in Start menu
+
+**Step 2: Create Basic Task**
+1. Click "Create Basic Task..." in the right panel
+2. **Name**: `MT5 Trading Bot`
+3. **Description**: `Daily automated trading analysis with risk management`
+4. Click "Next"
+
+**Step 3: Set Trigger**
+1. Select "Daily"
+2. Set your preferred time (e.g., 9:00 AM for market open)
+3. **Recur every**: 1 days
+4. Click "Next"
+
+**Step 4: Set Action**
+1. Select "Start a program"
+2. **Program/script**: `C:\Users\User\Downloads\1073\run_agent.bat`
+3. **Start in**: `C:\Users\User\Downloads\1073`
+4. Click "Next" then "Finish"
+
+**Step 5: Advanced Settings (Recommended)**
+- Right-click your task → "Properties"
+- **Security options**: ✅ "Run whether user is logged on or not"
+- **Settings**: ✅ "Run task as soon as possible after a scheduled start is missed"
+- **Conditions**: Uncheck "Start the task only if the computer is on AC power"
+
+#### Multiple Daily Runs
+
+For multiple analyses per day, create separate tasks for each time slot:
+- Task 1: 9:00 AM (Market Open)
+- Task 2: 12:00 PM (Midday)
+- Task 3: 4:00 PM (Market Close)
+
+#### Enhanced Logging for Scheduled Tasks
+
+Create `run_agent_scheduled.bat` in `C:\Users\User\Downloads\1073\`:
+```batch
+@echo off
+cd /d C:\Users\User\Downloads\1073
+
+if not exist "logs" mkdir logs
+
+echo [%date% %time%] Starting scheduled trading task... >> logs\schedule.log
+python capture_task.py >> logs\output.log 2>> logs\errors.log
+echo [%date% %time%] Task completed. >> logs\schedule.log
+```
+
+## 🔧 Configuration Options
+
+### Environment Variables
+
+| Variable | Description | Required | Example |
+|----------|-------------|----------|---------|
+| `GEMINI_API_KEY` | Google Gemini API key for AI analysis | ✅ Yes | `AIzaSyC...` |
+| `TARGET_WINDOW_TITLE` | Partial window title to capture | ✅ Yes | `MetaTrader 5` |
+| `TRADE_SYMBOL` | Trading symbol | ✅ Yes | `XAUUSD` |
+| `ACCOUNT_BALANCE` | Account balance for lot calculation | ✅ Yes | `10000.00` |
+| `RISK_PERCENTAGE` | Risk percentage per trade | ✅ Yes | `2.0` |
+| `WEBHOOK_URL` | URL to send trade signals | ❌ Optional | `https://...` |
+
+### Supported Trading Symbols
+
+The system supports various symbols with proper contract size handling:
+
+| Symbol | Description | Contract Size | Risk Unit |
+|--------|-------------|---------------|-----------|
+| `XAUUSD` | Gold | 100 oz | Per ounce |
+| `XAGUSD` | Silver | 5,000 oz | Per ounce |
+| `EURUSD` | Euro/Dollar | 100,000 | Per pip |
+| `GBPUSD` | Pound/Dollar | 100,000 | Per pip |
+| `USDJPY` | Dollar/Yen | 100,000 | Per pip |
+| `AUDUSD` | Aussie/Dollar | 100,000 | Per pip |
+| `USDCAD` | Dollar/Canadian | 100,000 | Per pip |
+| `USDCHF` | Dollar/Franc | 100,000 | Per pip |
+| `NZDUSD` | Kiwi/Dollar | 100,000 | Per pip |
+
+### Risk Management System
+
+The system automatically calculates lot sizes based on:
+
+1. **Account Balance**: Your total account equity
+2. **Risk Percentage**: Maximum percentage to risk per trade (recommended: 1-3%)
+3. **Stop Loss Distance**: Distance between entry and stop loss
+4. **Symbol Contract Size**: Proper contract specifications
+
+**Example Calculation**:
+```
+Account Balance: $10,000
+Risk Percentage: 2%
+Risk Amount: $200
+Entry Price: $2,665.50 (XAUUSD)
+Stop Loss: $2,650.50
+Price Difference: $15.00
+Contract Size: 100 oz
+Risk per Lot: $15.00 × 100 = $1,500
+Calculated Lot Size: $200 ÷ $1,500 = 0.13 lots
+```
+
+### Prompt Template
+
+The system uses `prompt.txt` file for AI analysis instructions. The current prompt focuses on:
+- Multi-timeframe analysis (1h, 30m, 1m)
+- Price action patterns
+- Support and resistance levels
+- Risk management with stop loss and take profit
 
 ## 📊 Output JSON Format
 
