@@ -130,7 +130,7 @@ Then edit the `.env` file with your settings:
 Run the script directly from your terminal for immediate analysis.
 
 ```bash
-cd C:\trading-bot
+cd C:\Users\User\Downloads\1073
 python capture_task.py
 ```
 
@@ -143,8 +143,8 @@ Automate the analysis to run on a schedule (e.g., every hour, or at market open)
 3.  **Name**: Give it a descriptive name like `MT5 AI Trading Analysis`.
 4.  **Trigger**: Choose your desired schedule (e.g., "Daily"). Set the start time and recurrence.
 5.  **Action**: Select "Start a program".
-      - **Program/script**: `C:\trading-bot\run_agent.bat`
-      - **Start in (optional)**: `C:\trading-bot`
+      - **Program/script**: `C:\Users\User\Downloads\1073\run_agent.bat`
+      - **Start in (optional)**: `cd C:\Users\User\Downloads\1073`
 6.  **Finish**: Review and click "Finish".
 7.  **Advanced Settings**:
       - Right-click the task and select "Properties".
